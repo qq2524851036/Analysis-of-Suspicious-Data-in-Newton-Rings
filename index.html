@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>牛顿环可疑数据分析工具 </title>
+<style>
+*{box-sizing:border-box;font-family:"Microsoft YaHei",sans-serif}
+body{padding:20px;max-width:1400px;margin:0 auto}
+h2{margin-top:0}
+.ctrl-box{margin-bottom:12px;padding:10px;border:1px solid #ccc;background:#f7f7f7}
+textarea{width:100%;height:80px;padding:6px;font-size:14px}
+button{padding:8px 14px;margin:4px;font-size:14px;cursor:pointer}
+table{border-collapse:collapse;width:100%;margin-top:10px}
+th,td{border:1px solid #666;padding:6px 4px;text-align:center}
+input{width:95%;padding:3px;border:1px solid #aaa;font-size:14px}
+.warn-yellow{background:#fff280 !important;color:#000 !important;}
+.warn-red{background:#ff7777 !important;color:#000 !important;}
+.text-red{color:#d62728;font-weight:bold}
+.msg{padding:8px;margin:8px 0;border-radius:4px;line-height:1.6}
+.msg-error{background:#ffe9e9;border:1px solid #f44}
+.msg-ok{background:#e9ffe9;border:1px solid #2a2}
+.tip-static{margin:8px 0;padding:8px;background:#f0f7ff;border:1px solid #82b7e8;border-radius:4px;}
+</style>
+</head>
+<body>
+<h2>牛顿环可疑数据分析工具</h2>
+
+<div class="tip-static">
+<div>📌 公式：b=y<sub>K+1</sub>−y<sub>K</sub>；E<sub>b</sub>=|b<sub>K+1</sub>−b|/b；|E<sub>b</sub>|>10%标黄、|E<sub>b</sub>|>25%标红</div>
+<div>📌 Δr<sub>左</sub>=|x<sub>左K+1</sub>−x<sub>左K</sub>|；Δr<sub>右</sub>=|x<sub>右K+1</sub>−x<sub>右K</sub>|；Δr标红为异常；相邻两个x标红即为中间大概率漏数级次</div>
+</div>
+
+<div class="ctrl-box">
+  <div>批量粘贴导入（格式：级次K  x左  x右，空格/制表符分隔，一行一条）：</div>
+  <textarea id="pasteArea" placeholder="示例：
+12 27.352 22.642
+13 27.457 22.438
+14 27.559 22.342
+15 27.655 22.250
+"></textarea>
+  <br>
+  <button onclick="importData()">粘贴导入</button>
+  <button onclick="addRow()">增加一行</button>
+  <button onclick="calcAll()">全部计算</button>
+  <button onclick="clearAll()">清空全部</button>
+</div>
+<div id="msgBox" class="msg msg-ok">等待输入数据，点击【全部计算】</div>
+<table id="mainTable">
+<thead>
+  <tr>
+    <th>级次K</th>
+    <th>x左</th>
+    <th>x右</th>
+    <th>y=D²</th>
+    <th>b</th>
+    <th>E<sub>b</sub></th>
+    <th>Δr<sub>左</sub></th>
+    <th>Δr<sub>右</sub></th>
+  </tr>
+</thead>
+<tbody id="tbody">
+</tbody>
+</table>
+<script>
+const tbody = document.getElementById('tbody');
+const msgBox = document.getElementById('msgBox');
+
+function addRow(kVal='', xl='', xr=''){
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input class="k" value="${kVal}"></td>
+    <td class="cellXl"><input class="xl" value="${xl}"></td>
+    <td class="cellXr"><input class="xr" value="${xr}"></td>
+    <td class="y"></td>
+    <td class="bk"></td>
+    <td class="ebk"></td>
+    <td class="drLeft"></td>
+    <td class="drRight"></td>
+  `;
+  tbody.appendChild(tr);
+}
+
+function importData(){
+  const txt = document.getElementById('pasteArea').value.trim();
+  if(!txt) return;
+  clearAll(true);
+  const lines = txt.split('\n');
+  lines.forEach(line=>{
+    const arr = line.trim().split(/\s+/);
+    if(arr.length>=3){
+      addRow(arr[0], arr[1], arr[2]);
+    }
+  })
+  setMsg("导入完成，请点【全部计算】","ok");
+}
+
+function clearAll(keepPaste=false){
+  tbody.innerHTML='';
+  if(!keepPaste) document.getElementById('pasteArea').value='';
+  setMsg("已清空","ok");
+}
+
+function setMsg(htmlText,type="ok"){
+  msgBox.innerHTML = htmlText;
+  msgBox.className = 'msg '+(type==='error'?'msg-error':'msg-ok');
+}
+
+function calcAll(){
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  let data = [];
+
+  //清除全部警告样式
+  document.querySelectorAll('.warn-yellow,.warn-red').forEach(el=>{
+    el.classList.remove('warn-yellow','warn-red');
+  });
+
+  for(let r of rows){
+    const k = parseFloat(r.querySelector('.k').value);
+    const xl = parseFloat(r.querySelector('.xl').value);
+    const xr = parseFloat(r.querySelector('.xr').value);
+    if(isNaN(k)||isNaN(xl)||isNaN(xr)){
+      continue;
+    }
+    data.push({
+      dom:r,
+      K:k,
+      xL:xl,
+      xR:xr,
+      y:0,
+      bk:null,
+      ebk:null,
+      drLeft:null,
+      drRight:null
+    })
+  }
+  if(data.length<3){
+    setMsg("至少输入3组数据，才能算出E_b！","error");
+    return;
+  }
+  data.sort((a,b)=>a.K - b.K);
+
+  //1. y = (x左 - x右)^2
+  for(let i=0;i<data.length;i++){
+    const d = data[i];
+    const D = d.xL - d.xR;
+    d.y = D * D;
+    d.dom.querySelector('.y').innerText = d.y.toFixed(5);
+  }
+
+  //2. b = y_{K+1} - y_K，Δr左、Δr右
+  for(let i=0;i<data.length;i++){
+    const d = data[i];
+    if(i+1 < data.length){
+      const next = data[i+1];
+      d.bk = next.y - d.y;
+      d.dom.querySelector('.bk').innerText = d.bk.toFixed(5);
+      d.drLeft = Math.abs(next.xL - d.xL);
+      d.dom.querySelector('.drLeft').innerText = d.drLeft.toFixed(5);
+      d.drRight = Math.abs(next.xR - d.xR);
+      d.dom.querySelector('.drRight').innerText = d.drRight.toFixed(5);
+    }else{
+      d.dom.querySelector('.bk').innerText = '-';
+      d.dom.querySelector('.drLeft').innerText = '-';
+      d.dom.querySelector('.drRight').innerText = '-';
+    }
+  }
+
+  //3. E_b = |b_{K+1} - b_K| / b_K
+  for(let i=0; i+2 < data.length; i++){
+    const cur = data[i];
+    const bNext = data[i+1].bk;
+    if(cur.bk !== null && cur.bk !==0 && bNext !== null){
+      cur.ebk = Math.abs(bNext - cur.bk) / cur.bk;
+      cur.dom.querySelector('.ebk').innerText = cur.ebk.toFixed(4);
+    }else{
+      cur.dom.querySelector('.ebk').innerText = '-';
+    }
+  }
+  data[data.length-2].dom.querySelector('.ebk').innerText = '-';
+  data[data.length-1].dom.querySelector('.ebk').innerText = '-';
+
+  //4.E_b上色：|E_b|>0.10黄，>0.25红
+  for(let i=0;i<data.length;i++){
+    const d = data[i];
+    if(d.ebk !== null){
+      const td = d.dom.querySelector('.ebk');
+      const absEbk = Math.abs(d.ebk);
+      if(absEbk > 0.25){
+        td.classList.add('warn-red');
+      }else if(absEbk > 0.10){
+        td.classList.add('warn-yellow');
+      }
+    }
+  }
+
+  // ========= Δr异常判定：Δr_K>1.7*Δr_{K+1} OR Δr_K>1.7*Δr_{K‑1} =========
+  // 遍历每一个拥有Δr的行（不是最后一行）
+  for(let i=0; i < data.length-1; i++){
+    const cur = data[i];
+    //cur.drLeft / cur.drRight 为 Δr_K
+    let leftAbnormal = false;
+    let rightAbnormal = false;
+
+    //条件1：和后一项比 Δr_K >1.7 * Δr_{K+1}
+    if(i+1 <= data.length-2){
+      const nextDrL = data[i+1].drLeft;
+      const nextDrR = data[i+1].drRight;
+      if(cur.drLeft!==null && nextDrL!==null){
+        if(cur.drLeft > 1.7 * nextDrL) leftAbnormal = true;
+      }
+      if(cur.drRight!==null && nextDrR!==null){
+        if(cur.drRight > 1.7 * nextDrR) rightAbnormal = true;
+      }
+    }
+    //条件2：和前一项比 Δr_K >1.7 * Δr_{K‑1}，i>0才有前一项
+    if(i>0){
+      const prevDrL = data[i-1].drLeft;
+      const prevDrR = data[i-1].drRight;
+      if(cur.drLeft!==null && prevDrL!==null){
+        if(cur.drLeft > 1.7 * prevDrL) leftAbnormal = true;
+      }
+      if(cur.drRight!==null && prevDrR!==null){
+        if(cur.drRight > 1.7 * prevDrR) rightAbnormal = true;
+      }
+    }
+
+    //Δr左K异常：标红 Δr左K、x左K、x左(K+1)
+    if(leftAbnormal){
+      cur.dom.querySelector('.drLeft').classList.add('warn-red');
+      cur.dom.querySelector('.cellXl').classList.add('warn-red');
+      data[i+1].dom.querySelector('.cellXl').classList.add('warn-red');
+    }
+    //Δr右K异常：标红 Δr右K、x右K、x右(K+1)
+    if(rightAbnormal){
+      cur.dom.querySelector('.drRight').classList.add('warn-red');
+      cur.dom.querySelector('.cellXr').classList.add('warn-red');
+      data[i+1].dom.querySelector('.cellXr').classList.add('warn-red');
+    }
+  }
+
+  setMsg("✅计算完成","ok");
+}
+</script>
+</body>
+</html>
